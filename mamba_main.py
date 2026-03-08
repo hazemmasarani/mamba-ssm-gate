@@ -43,31 +43,25 @@ def worker(rank, world_size, devices, input_ids, port_num, return_dict):
     cleanup()
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run Mamba models on multiple GPUs")
-    parser.add_argument("-dev0", type=str, required=True, help="First GPU device, e.g. cuda:0")
-    parser.add_argument("-dev1", type=str, required=True, help="Second GPU device, e.g. cuda:1")
-    parser.add_argument("-batch_size", type=int, default=8, help="Batch size")
-    parser.add_argument("-seq_len", type=int, default=1024, help="Sequence length")
-    parser.add_argument("-port_num", type=int, default=12355, help="Port number")
-    args = parser.parse_args()
+def mamba_ssm_gate(dev0, dev1, batch_size, seq_len, port_num, input_ids=None):
 
     world_size = 2
-    devices = [args.dev0, args.dev1]
+    devices = [dev0, dev1]
 
     # Create input_ids on CPU first
-    input_ids = torch.randint(
-        low=0,
-        high=50280,  # Assuming vocab size of 50280, adjust if needed
-        size=(args.batch_size, args.seq_len)
-    )
+    if input_ids is None:
+        input_ids = torch.randint(
+            low=0,
+            high=50280,  # Assuming vocab size of 50280, adjust if needed
+            size=(batch_size, seq_len)
+        )
 
     manager = mp.Manager()
     return_dict = manager.dict()
 
     mp.spawn(
         worker,
-        args=(world_size, devices, input_ids, args.port_num, return_dict),
+        args=(world_size, devices, input_ids, port_num, return_dict),
         nprocs=world_size,
         join=True,
     )
@@ -77,4 +71,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Run Mamba models on multiple GPUs")
+    parser.add_argument("-dev0", type=str, required=True, help="First GPU device, e.g. cuda:0")
+    parser.add_argument("-dev1", type=str, required=True, help="Second GPU device, e.g. cuda:1")
+    parser.add_argument("-batch_size", type=int, default=8, help="Batch size")
+    parser.add_argument("-seq_len", type=int, default=1024, help="Sequence length")
+    parser.add_argument("-port_num", type=int, default=12355, help="Port number")
+    args = parser.parse_args()
+    mamba_ssm_gate(args.dev0, args.dev1, args.batch_size, args.seq_len, args.port_num)
