@@ -2,10 +2,10 @@ import queue
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from mamba.configuration import make_split_config
-from mamba.mixer import MambaModel
-from mamba.weight_split import synchronize_weights
-from inference_server import InferenceServer, ThreadLogger, OOMException
+from models.mamba_tp.mamba.configuration import make_split_config
+from models.mamba_tp.mamba.mixer import MambaModel
+from models.mamba_tp.mamba.weight_split import synchronize_weights
+from models.mamba_tp.inference_server import InferenceServer, ThreadLogger, OOMException
 import copy
 
 devices = ["cuda:3", "cuda:2", "cuda:1", "cuda:0"]
@@ -90,15 +90,15 @@ class MambaDPServer(InferenceServer):
     output[slice_start:slice_end] = out.cpu()
 
 class MambaTPServer(InferenceServer):
-  def infer(self, input_embeds: torch.Tensor) -> torch.Tensor:
+  def infer(self, input_embeds: torch.Tensor, counter: int = 0) -> torch.Tensor:
     if self.n_gpus != 1:
-      return super().infer(input_embeds)
+      return super().infer(input_embeds, counter=counter)
 
     output = torch.empty_like(input_embeds, dtype=torch.float32)
     split_input_embeds = self.split_input(input_embeds)
     error_queue = queue.SimpleQueue()
 
-    self._infer_wrapper(error_queue, 0, 1, self.models[0], split_input_embeds[0], output)
+    self._infer_wrapper(error_queue, 0, 1, self.models[0], split_input_embeds[0], output, counter=counter)
     err = error_queue.get()
     if err is not None:
       msg, tb = err
@@ -122,10 +122,10 @@ class MambaTPServer(InferenceServer):
     return split_input_embeds
 
   @staticmethod
-  def _infer(logger: ThreadLogger, rank: int, world: int, model: nn.Module, split_input: torch.Tensor, output: torch.Tensor) -> None:
+  def _infer(logger: ThreadLogger, rank: int, world: int, model: nn.Module, split_input: torch.Tensor, output: torch.Tensor, counter: int) -> None:
     device = torch.device(devices[rank])
     dist.init_process_group(backend='nccl', rank=rank, device_id=device)
-    out = model(inputs_embeds=split_input).last_hidden_state.detach()
+    out = model(inputs_embeds=split_input, counter = counter).last_hidden_state.detach()
     if rank == 0:
       output[:] = out.cpu()
   

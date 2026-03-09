@@ -59,36 +59,33 @@ class InferenceServer(ABC):
 
   @staticmethod
   @abstractmethod
-  def _infer(logger: ThreadLogger, rank: int, world: int, model: nn.Module, split_input: torch.Tensor, output: torch.Tensor) -> None:
+  def _infer(logger: ThreadLogger, rank: int, world: int, model: nn.Module, split_input: torch.Tensor, output: torch.Tensor, counter: int = 0) -> None:
     """Thread worker"""
     raise NotImplementedError("Replace with per-thread inference call")
 
   @classmethod
-  def _infer_wrapper(cls, error_queue, rank, world, *args, **kwargs):
+  def _infer_wrapper(cls, error_queue, rank, world, *args, counter=0, **kwargs):
     """
     Wrapper that calls the subclass's _infer method and captures exceptions.
     """
 
     logger = ThreadLogger(f"{cls.__name__} Rank {rank}", error_queue, verbose=True)
-    logger.debug("in _infer_wrapper")
     try:
-      os.environ['MASTER_ADDR'] = 'localhost'
-      os.environ['MASTER_PORT'] = str(12345)
-      os.environ['WORLD_SIZE'] = str(world)
-      os.environ['RANK'] = str(rank)
-      start = time.perf_counter()
-      cls._infer(logger, rank, world, *args, **kwargs)
-      logger.info(f"finished _infer in {(time.perf_counter() - start)*1000:.0f} ms")
-      logger.debug("destroying process group")
-      if dist.is_initialized():
-        dist.destroy_process_group()
-      logger.debug("destroyed process group")
-      error_queue.put(None)
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = str(12345)
+        os.environ['WORLD_SIZE'] = str(world)
+        os.environ['RANK'] = str(rank)
+        start = time.perf_counter()
+        cls._infer(logger, rank, world, *args, counter=counter, **kwargs)
+        logger.info(f"finished _infer in {(time.perf_counter() - start)*1000:.0f} ms")
+        if dist.is_initialized():
+            dist.destroy_process_group()
+        error_queue.put(None)
     except Exception as err:
-      tb = traceback.format_exc()
-      logger.error(str(err), tb)
+        tb = traceback.format_exc()
+        logger.error(str(err), tb)
 
-  def infer(self, input_embeds: torch.Tensor) -> torch.Tensor:
+  def infer(self, input_embeds: torch.Tensor, counter: int = 0) -> torch.Tensor:
     output = torch.empty_like(input_embeds, dtype=torch.float32)
     split_input_embeds = self.split_input(input_embeds)
     processes = []
@@ -98,7 +95,7 @@ class InferenceServer(ABC):
       error_queue = mp.Queue()
       error_queues.append(error_queue)
       start = time.perf_counter()
-      p = mp.Process(target=self._infer_wrapper, args=(error_queue, i, len(self.models), self.models[i], split_input_embeds[i], output))
+      p = mp.Process(target=self._infer_wrapper, args=(error_queue, i, len(self.models), self.models[i], split_input_embeds[i], output), kwargs={"counter": counter})
       p.start()
       # print(f"Process {i} started in {time.perf_counter() - start} seconds")
       processes.append(p)

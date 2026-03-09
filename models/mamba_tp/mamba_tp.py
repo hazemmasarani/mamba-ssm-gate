@@ -1,5 +1,5 @@
 import torch
-from mamba_server import server_factory
+from models.mamba_tp.mamba_server import server_factory
 import argparse
 
 # Parameters

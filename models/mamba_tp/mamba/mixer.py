@@ -12,6 +12,24 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput
 # from causal_conv1d import causal_conv1d_fn
 
+import logging
+import os
+
+# Create log directory
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, "tp_latency.log")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,               # capture INFO and above
+    format="%(message)s",
+    handlers=[
+        logging.FileHandler(log_file),  # write to file
+        logging.StreamHandler()         # also print to console
+    ]
+)
+
 class MambaRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
         """
@@ -302,7 +320,7 @@ class MambaPreTrainedModel(PreTrainedModel):
                     nn.init.kaiming_uniform_(p, a=math.sqrt(5))
                     with torch.no_grad():
                         p /= math.sqrt(self.config.num_hidden_layers)
-                        
+
 class MambaModel(MambaPreTrainedModel):
     
     # Called before each forward pass
@@ -363,6 +381,7 @@ class MambaModel(MambaPreTrainedModel):
         return_dict: Optional[bool] = None,
         cache_position: Optional[Any] = None,
         attention_mask: Optional[torch.LongTensor] = None,
+        counter: int=0,
     ) -> Union[Tuple, MambaOutput]:
         self.reset_benchmark()
 
@@ -417,6 +436,13 @@ class MambaModel(MambaPreTrainedModel):
         #     hidden_states=all_hidden_states,
         # )
         #* TEST ENDS
+    
+        batch_size, seq_len, _ = inputs_embeds.shape
+        
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        # record start
+        start_event.record()
 
         layer_idx = 0
         for mixer_block in self.layers:
@@ -455,6 +481,16 @@ class MambaModel(MambaPreTrainedModel):
             # print(f'[Rank {rank}] | Completed block {mixer_block.layer_idx}')
         fnorm_start = perf_counter()
         hidden_states = self.norm_f(hidden_states)
+        # record end
+        end_event.record()
+
+        # wait for GPU to finish all work
+        torch.cuda.synchronize()
+        
+        # compute elapsed time
+        elapsed_ms = start_event.elapsed_time(end_event)
+        logging.info(f"{batch_size}/{seq_len}/{rank}/{counter}/{elapsed_ms}")
+
         self.config.benchmark["fnorm"].append(perf_counter() - fnorm_start)
 
         if output_hidden_states:
@@ -468,3 +504,4 @@ class MambaModel(MambaPreTrainedModel):
             cache_params=cache_params if use_cache else None,
             hidden_states=all_hidden_states,
         )
+    
